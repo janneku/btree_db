@@ -2,34 +2,44 @@
 #define _BTREE_H
 
 #include <stdio.h>
+#include <stdint.h>
 
-typedef int (*cmp_func_t)(void *key1, void *key2);
-
-struct btree_node {
-	void *key;
-	void *value;
-};
+#define SHA1_LENGTH	20
 
 struct btree_item {
-	void *key, *value;
-	struct btree_table *child;
-};
+	uint8_t sha1[SHA1_LENGTH];
+	uint32_t offset;
+	uint32_t child;
+} __attribute__((packed));
+
+#define TABLE_SIZE	((4096 - 4) / sizeof(struct btree_item))
 
 struct btree_table {
-	size_t size;
-	struct btree_item items[];
+	struct btree_item items[TABLE_SIZE];
+	uint8_t size;
+};
+
+struct blob_info {
+	uint32_t len;
+};
+
+struct btree_super {
+	uint32_t top;
+	uint32_t free_top;
 };
 
 struct btree {
-	struct btree_table *top;
-	cmp_func_t cmp;
-	size_t num_keys;
+	size_t top;
+	size_t free_top;
+	FILE *file;
 };
 
-void btree_init(struct btree *btree, cmp_func_t cmp, size_t num_keys);
-void *btree_insert(struct btree *btree, void *key, void *value);
-void *btree_get(struct btree *btree, void *key);
-void *btree_delete(struct btree *btree, void *key);
-size_t btree_depth(struct btree_table *table);
+int btree_open(struct btree *btree, const char *file);
+int btree_creat(struct btree *btree, const char *file);
+void btree_close(struct btree *btree);
+void btree_insert(struct btree *btree, const uint8_t *sha1, const void *data,
+		  size_t len);
+void *btree_get(struct btree *btree, const uint8_t *sha1, size_t *len);
+int btree_delete(struct btree *btree, const uint8_t *sha1);
 
 #endif

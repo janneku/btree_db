@@ -1,138 +1,263 @@
 #include "btree.h"
+#include <assert.h>
 #include <string.h>
 #include <stdlib.h>
+#include <arpa/inet.h> /* htonl/ntohl */
 
-#if 0
-void dump(struct btree_table *table, int level)
+static void read_table(struct btree *btree, struct btree_table *table,
+			size_t offset)
 {
-	if (table == NULL) return;
-	size_t i, j;
-	for (i = 0; i < table->size; ++i) {
-		dump(table->items[i].child, level+1);
-		for (j = 0; j < level; ++j)
-			printf("   ");
-		printf("%s", table->items[i].key);
+	assert(offset != 0);
+	fseek(btree->file, offset, SEEK_SET);
+	if (fread(table, 1, sizeof(*table), btree->file) != sizeof(*table))
+		assert(0);
+}
+
+static void write_table(struct btree *btree, struct btree_table *table,
+			size_t offset)
+{
+	assert(offset != 0);
+	fseek(btree->file, offset, SEEK_SET);
+	if (fwrite(table, 1, sizeof(*table), btree->file) != sizeof(*table))
+		assert(0);
+}
+
+static void write_super(struct btree *btree)
+{
+	struct btree_super super;
+	memset(&super, 0, sizeof super);
+	super.top = htonl(btree->top);
+	super.free_top = htonl(btree->free_top);
+
+	fseek(btree->file, 0, SEEK_SET);
+	if (fwrite(&super, 1, sizeof(super), btree->file) != sizeof(super))
+		assert(0);
+}
+
+int btree_open(struct btree *btree, const char *fname)
+{
+	btree->file = fopen(fname, "rb+");
+	if (btree->file == NULL)
+		return -1;
+
+	struct btree_super super;
+	if (fread(&super, 1, sizeof(super), btree->file) != sizeof(super))
+		return -1;
+	btree->top = ntohl(super.top);
+	btree->free_top = ntohl(super.free_top);
+	return 0;
+}
+
+int btree_creat(struct btree *btree, const char *fname)
+{
+	memset(btree, 0, sizeof(*btree));
+	btree->file = fopen(fname, "wb+");
+	if (btree->file == NULL)
+		return -1;
+	write_super(btree);
+	return 0;
+}
+
+void btree_close(struct btree *btree)
+{
+	fclose(btree->file);
+}
+
+static int in_allocator = 0;
+
+static size_t delete_table(struct btree *btree, size_t table_offset,
+			   const uint8_t *sha1);
+
+static size_t collapse(struct btree *btree, size_t table_offset);
+
+#define ALIGNMENT	63
+
+static size_t alloc_chunk(struct btree *btree, size_t len)
+{
+	len = (len + ALIGNMENT) & ~ALIGNMENT;
+
+	size_t offset = 0;
+	if (!in_allocator) {
+		/* find free chunk with the larger or the same size */
+		uint8_t sha1[SHA1_LENGTH];
+		memset(sha1, 0, sizeof(sha1));
+		*(uint32_t *)sha1 = htonl(len);
+
+		in_allocator = 1;
+		offset = delete_table(btree, btree->free_top, sha1);
+		if (offset)
+			btree->free_top = collapse(btree, btree->free_top);
+		in_allocator = 0;
 	}
-	dump(table->items[i].child, level+1);
-}
-#endif
-
-static struct btree_table *alloc_table(struct btree *btree)
-{
-	size_t size = sizeof(struct btree_table) +
-			sizeof(struct btree_item) * (btree->num_keys + 1);
-	struct btree_table *table = malloc(size);
-	if (table == NULL)
-		return NULL;
-	memset(table, 0, size);
-	return table;
+	if (offset == 0) {
+		fseek(btree->file, 0, SEEK_END);
+		offset = (ftell(btree->file) + ALIGNMENT) & ~ALIGNMENT;
+	}
+	return offset;
 }
 
-void btree_init(struct btree *btree, cmp_func_t cmp, size_t num_keys)
+size_t insert_toplevel(struct btree *btree, size_t *table_offset,
+		uint8_t *sha1, const void *data, size_t len);
+
+static void free_chunk(struct btree *btree, size_t offset, size_t len)
 {
-	btree->top = NULL;
-	btree->num_keys = num_keys;
-	btree->cmp = cmp;
-}
+	assert(offset != 0);
 
-static struct btree_table *split_table(struct btree *btree,
-					struct btree_table *table,
-					void **key, void **value)
-{
-	*key = table->items[btree->num_keys / 2].key;
-	*value = table->items[btree->num_keys / 2].value;
-
-	table->size = btree->num_keys / 2;
-
-	struct btree_table *new_table = alloc_table(btree);
-	new_table->size = btree->num_keys / 2 - 1;
-
-	memcpy(new_table->items, &table->items[btree->num_keys / 2 + 1],
-		btree->num_keys / 2 * sizeof(struct btree_item));
-
-	return new_table;
-}
-
-static struct btree_table *collapse(struct btree_table *table)
-{
-	struct btree_table *child = table->items[0].child;
-	free(table);
-	return child;
-}
-
-static void remove_table(struct btree_table *table, size_t i,
-			 void **key, void **value);
-
-static void take_smallest(struct btree_table *table,
-			 void **key, void **value)
-{
-	struct btree_table *child = table->items[0].child;
-	if (child == NULL) {
-		remove_table(table, 0, key, value);
+	if (in_allocator)
 		return;
-	}
-	take_smallest(child, key, value);
-	if (child->size == 0)
-		table->items[0].child = collapse(child);
+	len = (len + 15) & ~15;
+
+	uint8_t sha1[SHA1_LENGTH];
+	memset(sha1, 0, sizeof(sha1));
+	*(uint32_t *)sha1 = htonl(len);
+	((uint32_t *)sha1)[1] = rand();
+	((uint32_t *)sha1)[2] = rand();
+
+	in_allocator = 1;
+	insert_toplevel(btree, &btree->free_top, sha1, NULL, offset);
+	in_allocator = 0;
 }
 
-static void take_largest(struct btree_table *table,
-			 void **key, void **value)
+static size_t insert_data(struct btree *btree, const void *data, size_t len)
 {
-	struct btree_table *child = table->items[table->size].child;
-	if (child == NULL) {
-		remove_table(table, table->size - 1, key, value);
-		return;
-	}
-	take_largest(child, key, value);
-	if (child->size == 0)
-		table->items[table->size].child = collapse(child);
+	if (data == NULL)
+		return len;
+
+	struct blob_info info;
+	memset(&info, 0, sizeof info);
+	info.len = htonl(len);
+
+	size_t offset = alloc_chunk(btree, sizeof info + len);
+
+	fseek(btree->file, offset, SEEK_SET);
+	if (fwrite(&info, 1, sizeof info, btree->file) != sizeof info)
+		assert(0);
+	if (fwrite(data, 1, len, btree->file) != len)
+		assert(0);
+
+	return offset;
 }
 
-static void remove_table(struct btree_table *table, size_t i,
-			 void **key, void **value)
+static size_t split_table(struct btree *btree, struct btree_table *table,
+			  uint8_t *sha1, size_t *offset)
 {
-	*key = table->items[i].key;
-	*value = table->items[i].value;
-	struct btree_table *left_child = table->items[i].child;
-	struct btree_table *right_child = table->items[i + 1].child;
+	memcpy(sha1, table->items[TABLE_SIZE / 2].sha1, SHA1_LENGTH);
+	*offset = ntohl(table->items[TABLE_SIZE / 2].offset);
+
+	struct btree_table new_table;
+	memset(&new_table, 0, sizeof new_table);
+
+	new_table.size = table->size - TABLE_SIZE / 2 - 1;
+
+	table->size = TABLE_SIZE / 2;
+
+	memcpy(new_table.items, &table->items[TABLE_SIZE / 2 + 1],
+		(new_table.size + 1) * sizeof(struct btree_item));
+
+	size_t new_table_offset = alloc_chunk(btree, sizeof new_table);
+	write_table(btree, &new_table, new_table_offset);
+
+	return new_table_offset;
+}
+
+static size_t collapse(struct btree *btree, size_t table_offset)
+{
+	struct btree_table table;
+	read_table(btree, &table, table_offset);
+	if (table.size == 0) {
+		size_t ret = ntohl(table.items[0].child);
+		free_chunk(btree, table_offset, sizeof table);
+		return ret;
+	}
+	return table_offset;
+}
+
+static size_t remove_table(struct btree *btree, struct btree_table *table,
+			   size_t i, uint8_t *sha1);
+
+static size_t take_smallest(struct btree *btree, size_t table_offset,
+			      uint8_t *sha1)
+{
+	struct btree_table table;
+	read_table(btree, &table, table_offset);
+
+	size_t offset = 0;
+	size_t child = ntohl(table.items[0].child);
+	if (child == 0) {
+		offset = remove_table(btree, &table, 0, sha1);
+	} else {
+		offset = take_smallest(btree, child, sha1);
+		table.items[0].child = htonl(collapse(btree, child));
+	}
+	write_table(btree, &table, table_offset);
+	return offset;
+}
+
+static size_t take_largest(struct btree *btree, size_t table_offset,
+			     uint8_t *sha1)
+{
+	struct btree_table table;
+	read_table(btree, &table, table_offset);
+
+	size_t offset = 0;
+	size_t child = ntohl(table.items[table.size].child);
+	if (child == 0) {
+		offset = remove_table(btree, &table, table.size - 1, sha1);
+	} else {
+		offset = take_largest(btree, child, sha1);
+		table.items[table.size].child = htonl(collapse(btree, child));
+	}
+	write_table(btree, &table, table_offset);
+	return offset;
+}
+
+static size_t remove_table(struct btree *btree, struct btree_table *table,
+			     size_t i, uint8_t *sha1)
+{
+	if (sha1)
+		memcpy(sha1, table->items[i].sha1, SHA1_LENGTH);
+	size_t offset = ntohl(table->items[i].offset);
+	size_t left_child = ntohl(table->items[i].child);
+	size_t right_child = ntohl(table->items[i + 1].child);
 
 	if (left_child && right_child) {
-		void *key, *value;
-		if (left_child->size > right_child->size) {
-			take_largest(left_child, &key, &value);
-			if (left_child->size == 0)
-				table->items[i].child = collapse(left_child);
+		uint8_t new_sha1[SHA1_LENGTH];
+		size_t new_offset;
+		if (rand() & 1) {
+			new_offset = take_largest(btree, left_child, new_sha1);
+			table->items[i].child = htonl(collapse(btree, left_child));
 		} else {
-			take_smallest(right_child, &key, &value);
-			if (right_child->size == 0)
-				table->items[i + 1].child = collapse(right_child);
+			new_offset = take_smallest(btree, right_child, new_sha1);
+			table->items[i + 1].child = htonl(collapse(btree, right_child));
 		}
-		table->items[i].key = key;
-		table->items[i].value = value;
-		return;
+		memcpy(table->items[i].sha1, new_sha1, SHA1_LENGTH);
+		table->items[i].offset = htonl(new_offset);
+	} else {
+		memmove(&table->items[i], &table->items[i + 1],
+			(table->size - i) * sizeof(struct btree_item));
+		table->size--;
+
+		if (left_child)
+			table->items[i].child = htonl(left_child);
+		else
+			table->items[i].child = htonl(right_child);
 	}
-
-	memmove(&table->items[i], &table->items[i + 1],
-		(table->size - i) * sizeof(struct btree_item));
-	table->size--;
-
-	if (left_child)
-		table->items[i].child = left_child;
-	else
-		table->items[i].child = right_child;
+	return offset;
 }
 
-static void *insert_table(struct btree *btree,
-			  struct btree_table *table, void **key, void **value)
+static size_t insert_table(struct btree *btree, size_t table_offset,
+			 uint8_t *sha1, const void *data, size_t len)
 {
-	size_t left = 0, right = table->size;
+	struct btree_table table;
+	read_table(btree, &table, table_offset);
+
+	size_t left = 0, right = table.size;
 	while (left < right) {
 		size_t i = (left + right) / 2;
-		int cmp = btree->cmp(*key, table->items[i].key);
+		int cmp = memcmp(sha1, table.items[i].sha1, SHA1_LENGTH);
 		if (cmp == 0) {
 			/* already in the table */
-			return table->items[i].value;
+			return ntohl(table.items[i].offset);
 		}
 		if (cmp < 0)
 			right = i;
@@ -141,119 +266,179 @@ static void *insert_table(struct btree *btree,
 	}
 	size_t i = left;
 
-	void *ret = NULL;
-	struct btree_table *child = table->items[i].child;
-	struct btree_table *right_child = NULL;
-	if (child) {
+	size_t offset = 0;
+	size_t child_offset = ntohl(table.items[i].child);
+	size_t right_child = 0;
+	size_t ret = 0;
+	if (child_offset) {
 		/* recursion */
-		ret = insert_table(btree, child, key, value);
-		if (child->size < btree->num_keys)
+		ret = insert_table(btree, child_offset, sha1, data, len);
+		struct btree_table child;
+		read_table(btree, &child, child_offset);
+		if (child.size < TABLE_SIZE-1)
 			return ret;
-		right_child = split_table(btree, child, key, value);
-	} else
-		ret = *value;
+		right_child = split_table(btree, &child, sha1, &offset);
+		write_table(btree, &child, child_offset);
+	} else {
+		ret = offset = insert_data(btree, data, len);
+	}
 
-	table->size++;
-	memmove(&table->items[i + 1], &table->items[i],
-		(table->size - i) * sizeof(struct btree_item));
-	table->items[i].key = *key;
-	table->items[i].value = *value;
-	table->items[i].child = child;
-	table->items[i + 1].child = right_child;
+	table.size++;
+	memmove(&table.items[i + 1], &table.items[i],
+		(table.size - i) * sizeof(struct btree_item));
+	memcpy(table.items[i].sha1, sha1, SHA1_LENGTH);
+	table.items[i].offset = htonl(offset);
+	table.items[i].child = htonl(child_offset);
+	table.items[i + 1].child = htonl(right_child);
+	write_table(btree, &table, table_offset);
 	return ret;
 }
 
-static void *delete_table(struct btree *btree,
-			  struct btree_table *table, void *key)
+static size_t delete_table(struct btree *btree, size_t table_offset,
+			   const uint8_t *sha1)
 {
-	size_t left = 0, right = table->size, i;
+	if (table_offset == 0)
+		return 0;
+	struct btree_table table;
+	read_table(btree, &table, table_offset);
+
+	size_t left = 0, right = table.size;
 	while (left < right) {
-		i = (left + right) / 2;
-		int cmp = btree->cmp(key, table->items[i].key);
-		if (cmp == 0)
-			break;
+		size_t i = (left + right) / 2;
+		int cmp = memcmp(sha1, table.items[i].sha1, SHA1_LENGTH);
+		if (cmp == 0) {
+			/* found */
+			size_t ret = remove_table(btree, &table, i, NULL);
+			write_table(btree, &table, table_offset);
+			return ret;
+		}
 		if (cmp < 0)
 			right = i;
 		else
 			left = i + 1;
 	}
 
-	if (left == right) {
-		/* not found - recursion */
-		i = left;
-		struct btree_table *child = table->items[i].child;
-		if (child == NULL)
-			return NULL;
-		void *ret = delete_table(btree, child, key);
-		if (child->size == 0)
-			table->items[i].child = collapse(child);
-		return ret;
+	/* not found - recursion */
+	size_t i = left;
+	size_t ret = 0;
+	size_t child = ntohl(table.items[i].child);
+	ret = delete_table(btree, child, sha1);
+	if (ret)
+		table.items[i].child = htonl(collapse(btree, child));
+
+	if (ret == 0 && in_allocator && i < table.size) {
+		/* remove the next largest */
+		ret = remove_table(btree, &table, i, NULL);
+	}
+	if (ret)
+		write_table(btree, &table, table_offset);
+	return ret;
+}
+
+size_t insert_toplevel(struct btree *btree, size_t *table_offset,
+			uint8_t *sha1, const void *data, size_t len)
+{
+	size_t offset = 0;
+	size_t ret = 0;
+	size_t right_child = 0;
+	if (*table_offset) {
+		ret = insert_table(btree, *table_offset, sha1, data, len);
+		struct btree_table table;
+		read_table(btree, &table, *table_offset);
+		if (table.size < TABLE_SIZE-1)
+			return ret;
+		right_child = split_table(btree, &table, sha1, &offset);
+		write_table(btree, &table, *table_offset);
+	} else {
+		ret = offset = insert_data(btree, data, len);
 	}
 
-	void *ret = NULL;
-	remove_table(table, i, &key, &ret);
+	struct btree_table new_table;
+	memset(&new_table, 0, sizeof new_table);
+
+	new_table.size = 1;
+	memcpy(new_table.items[0].sha1, sha1, SHA1_LENGTH);
+	new_table.items[0].offset = htonl(offset);
+	new_table.items[0].child = htonl(*table_offset);
+	new_table.items[1].child = htonl(right_child);
+
+	size_t new_table_offset = alloc_chunk(btree, sizeof new_table);
+	write_table(btree, &new_table, new_table_offset);
+
+	*table_offset = new_table_offset;
 	return ret;
 }
 
-void *btree_insert(struct btree *btree, void *key, void *value)
+void btree_insert(struct btree *btree, const uint8_t *c_sha1, const void *data,
+		  size_t len)
 {
-	void *ret = NULL;
-	struct btree_table *right_child = NULL;
-	if (btree->top) {
-		ret = insert_table(btree, btree->top, &key, &value);
-		if (btree->top->size < btree->num_keys)
-			return ret;
-		right_child = split_table(btree, btree->top, &key, &value);
-	} else
-		ret = value;
-
-	struct btree_table *table = alloc_table(btree);
-	table->size = 1;
-	table->items[0].key = key;
-	table->items[0].value = value;
-	table->items[0].child = btree->top;
-	table->items[1].child = right_child;
-
-	btree->top = table;
-	return ret;
+	uint8_t sha1[SHA1_LENGTH];
+	memcpy(sha1, c_sha1, sizeof sha1);
+	insert_toplevel(btree, &btree->top, sha1, data, len);
+	write_super(btree);
 }
 
-void *btree_delete(struct btree *btree, void *key)
+static size_t lookup(struct btree *btree, size_t table_offset,
+		     const uint8_t *sha1)
 {
-	void *ret = delete_table(btree, btree->top, key);
-	if (btree->top->size == 0)
-		btree->top = collapse(btree->top);
-	return ret;
-}
-
-void *btree_get(struct btree *btree, void *key)
-{
-	struct btree_table *table = btree->top;
-	while (table) {
-		size_t left = 0, right = table->size;
+	struct btree_table table;
+	while (table_offset) {
+		read_table(btree, &table, table_offset);
+		size_t left = 0, right = table.size, i;
 		while (left < right) {
-			size_t i = (left + right) / 2;
-			int cmp = btree->cmp(key, table->items[i].key);
-			if (cmp == 0)
-				return table->items[i].value;
+			i = (left + right) / 2;
+			int cmp = memcmp(sha1, table.items[i].sha1, SHA1_LENGTH);
+			if (cmp == 0) {
+				/* found */
+				return ntohl(table.items[i].offset);
+			}
 			if (cmp < 0)
 				right = i;
 			else
 				left = i + 1;
 		}
-		table = table->items[left].child;
+		table_offset = ntohl(table.items[left].child);
 	}
-	return NULL;
+	return 0;
 }
 
-size_t btree_depth(struct btree_table *table)
+void *btree_get(struct btree *btree, const uint8_t *sha1, size_t *len)
 {
-	size_t i, max_depth = 0;
-	for (i = 0; i <= table->size; ++i) {
-		if (table->items[i].child) {
-			size_t depth = btree_depth(table->items[i].child);
-			if (depth > max_depth) max_depth = depth;
-		}
+	size_t offset = lookup(btree, btree->top, sha1);
+	if (offset == 0)
+		return NULL;
+
+	fseek(btree->file, offset, SEEK_SET);
+	struct blob_info info;
+	if (fread(&info, 1, sizeof info, btree->file) != sizeof info)
+		return NULL;
+	*len = ntohl(info.len);
+
+	void *data = malloc(*len);
+	if (data == NULL)
+		return NULL;
+	if (fread(data, 1, *len, btree->file) != *len) {
+		free(data);
+		data = NULL;
 	}
-	return max_depth + 1;
+	return data;
+}
+
+int btree_delete(struct btree *btree, const uint8_t *sha1)
+{
+	size_t offset = delete_table(btree, btree->top, sha1);
+	if (offset == 0)
+		return -1;
+
+	btree->top = collapse(btree, btree->top);
+	write_super(btree);
+
+	fseek(btree->file, offset, SEEK_SET);
+	struct blob_info info;
+	if (fread(&info, 1, sizeof info, btree->file) != sizeof info)
+		return 0;
+
+	free_chunk(btree, offset, sizeof info + ntohl(info.len));
+	write_super(btree);
+	return 0;
 }
