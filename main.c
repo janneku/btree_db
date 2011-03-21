@@ -32,6 +32,8 @@ int main()
 {
 	const char *fname = "test.dat";
 
+	srand(time(NULL));
+
 	struct btree btree;
 	if (file_exists(fname)) {
 		if (btree_open(&btree, fname)) {
@@ -47,19 +49,19 @@ int main()
 
 	uint8_t sha1[SHA1_LENGTH];
 	memset(sha1, 0, sizeof sha1);
-	char buf[30], val[30];
+	char val[100];
 	size_t i;
 
 	start_timer();
 	for (i = 0; i < 100000; ++i) {
 		sprintf(sha1, "foobar %zd", i);
-		sprintf(val, "value %zd", i);
+		sprintf(val, "value %zd", i*i);
 		btree_insert(&btree, sha1, val, strlen(val));
 	}
 	printf("insert: %.6f\n", get_timer());
 
 	memset(sha1, 0, sizeof sha1);
-	memcpy(sha1, "foobar ");
+	strcpy(sha1, "foobar ");
 
 	start_timer();
 	for (i = 0; i < 100000; ++i) {
@@ -71,6 +73,19 @@ int main()
 		free(data);
 	}
 	printf("get: %.6f\n", get_timer());
+
+	memset(sha1, 0, sizeof sha1);
+	for (i = 0; i < 100000/2; i++) {
+		sprintf(sha1, "foobar %zd", i);
+		if (btree_delete(&btree, sha1))
+			printf("DELETE %zd\n", i);
+	}
+	memset(sha1, 0, sizeof sha1);
+	for (i = 0; i < 100000/2; i++) {
+		sprintf(sha1, "foobar %zd", i);
+		sprintf(val, "testingtestingtesting%zd", i*i);
+		btree_insert(&btree, sha1, val, strlen(val));
+	}
 
 	memset(sha1, 0, sizeof sha1);
 

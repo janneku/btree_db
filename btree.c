@@ -22,18 +22,6 @@ static void write_table(struct btree *btree, struct btree_table *table,
 		assert(0);
 }
 
-static void write_super(struct btree *btree)
-{
-	struct btree_super super;
-	memset(&super, 0, sizeof super);
-	super.top = htonl(btree->top);
-	super.free_top = htonl(btree->free_top);
-
-	fseek(btree->file, 0, SEEK_SET);
-	if (fwrite(&super, 1, sizeof(super), btree->file) != sizeof(super))
-		assert(0);
-}
-
 int btree_open(struct btree *btree, const char *fname)
 {
 	btree->file = fopen(fname, "rb+");
@@ -47,6 +35,8 @@ int btree_open(struct btree *btree, const char *fname)
 	btree->free_top = ntohl(super.free_top);
 	return 0;
 }
+
+static void write_super(struct btree *btree);
 
 int btree_creat(struct btree *btree, const char *fname)
 {
@@ -70,7 +60,7 @@ static size_t delete_table(struct btree *btree, size_t table_offset,
 
 static size_t collapse(struct btree *btree, size_t table_offset);
 
-#define ALIGNMENT	63
+#define ALIGNMENT	15
 
 static size_t alloc_chunk(struct btree *btree, size_t len)
 {
@@ -99,13 +89,28 @@ static size_t alloc_chunk(struct btree *btree, size_t len)
 size_t insert_toplevel(struct btree *btree, size_t *table_offset,
 		uint8_t *sha1, const void *data, size_t len);
 
+struct chunk {
+	size_t offset;
+	size_t len;
+};
+
+#define FREE_QUEUE_LEN	256
+
+static struct chunk free_queue[FREE_QUEUE_LEN];
+static size_t free_queue_len = 0;
+
 static void free_chunk(struct btree *btree, size_t offset, size_t len)
 {
 	assert(offset != 0);
 
-	if (in_allocator)
+	if (in_allocator) {
+		if (free_queue_len >= FREE_QUEUE_LEN) return;
+		struct chunk *chunk = &free_queue[free_queue_len++];
+		chunk->offset = offset;
+		chunk->len = len;
 		return;
-	len = (len + 15) & ~15;
+	}
+	len = (len + ALIGNMENT) & ~ALIGNMENT;
 
 	uint8_t sha1[SHA1_LENGTH];
 	memset(sha1, 0, sizeof(sha1));
@@ -116,6 +121,26 @@ static void free_chunk(struct btree *btree, size_t offset, size_t len)
 	in_allocator = 1;
 	insert_toplevel(btree, &btree->free_top, sha1, NULL, offset);
 	in_allocator = 0;
+}
+
+static void write_super(struct btree *btree)
+{
+	/* free queued chunks */
+	size_t i;
+	for (i = 0; i < free_queue_len; ++i) {
+		struct chunk *chunk = &free_queue[i];
+		free_chunk(btree, chunk->offset, chunk->len);
+	}
+	free_queue_len = 0;
+
+	struct btree_super super;
+	memset(&super, 0, sizeof super);
+	super.top = htonl(btree->top);
+	super.free_top = htonl(btree->free_top);
+
+	fseek(btree->file, 0, SEEK_SET);
+	if (fwrite(&super, 1, sizeof(super), btree->file) != sizeof(super))
+		assert(0);
 }
 
 static size_t insert_data(struct btree *btree, const void *data, size_t len)
@@ -292,6 +317,13 @@ static size_t insert_table(struct btree *btree, size_t table_offset,
 	table.items[i + 1].child = htonl(right_child);
 	write_table(btree, &table, table_offset);
 	return ret;
+}
+
+static void dump_sha1(const uint8_t *sha1)
+{
+	size_t i;
+	for (i = 0; i < SHA1_LENGTH; i++)
+		printf("%02x", sha1[i]);
 }
 
 static size_t delete_table(struct btree *btree, size_t table_offset,
