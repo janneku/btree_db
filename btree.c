@@ -4,6 +4,26 @@
 #include <stdlib.h>
 #include <arpa/inet.h> /* htonl/ntohl */
 
+static inline __be32 to_be32(uint32_t x)
+{
+	return (FORCE __be32)htonl(x);
+}
+
+static inline __be16 to_be16(uint16_t x)
+{
+	return (FORCE __be16)htons(x);
+}
+
+static inline uint32_t from_be32(__be32 x)
+{
+	return ntohl((FORCE uint32_t)x);
+}
+
+static inline uint16_t from_be16(__be16 x)
+{
+	return ntohs((FORCE uint16_t)x);
+}
+
 static void read_table(struct btree *btree, struct btree_table *table,
 			size_t offset)
 {
@@ -31,8 +51,8 @@ int btree_open(struct btree *btree, const char *fname)
 	struct btree_super super;
 	if (fread(&super, 1, sizeof(super), btree->file) != sizeof(super))
 		return -1;
-	btree->top = ntohl(super.top);
-	btree->free_top = ntohl(super.free_top);
+	btree->top = from_be32(super.top);
+	btree->free_top = from_be32(super.free_top);
 	return 0;
 }
 
@@ -71,7 +91,7 @@ static size_t alloc_chunk(struct btree *btree, size_t len)
 		/* find free chunk with the larger or the same size */
 		uint8_t sha1[SHA1_LENGTH];
 		memset(sha1, 0, sizeof(sha1));
-		*(uint32_t *)sha1 = htonl(len);
+		*(__be32 *)sha1 = to_be32(len);
 
 		in_allocator = 1;
 		offset = delete_table(btree, btree->free_top, sha1);
@@ -114,7 +134,7 @@ static void free_chunk(struct btree *btree, size_t offset, size_t len)
 
 	uint8_t sha1[SHA1_LENGTH];
 	memset(sha1, 0, sizeof(sha1));
-	*(uint32_t *)sha1 = htonl(len);
+	*(__be32 *)sha1 = to_be32(len);
 	((uint32_t *)sha1)[1] = rand();
 	((uint32_t *)sha1)[2] = rand();
 
@@ -135,8 +155,8 @@ static void write_super(struct btree *btree)
 
 	struct btree_super super;
 	memset(&super, 0, sizeof super);
-	super.top = htonl(btree->top);
-	super.free_top = htonl(btree->free_top);
+	super.top = to_be32(btree->top);
+	super.free_top = to_be32(btree->free_top);
 
 	fseek(btree->file, 0, SEEK_SET);
 	if (fwrite(&super, 1, sizeof(super), btree->file) != sizeof(super))
@@ -150,7 +170,7 @@ static size_t insert_data(struct btree *btree, const void *data, size_t len)
 
 	struct blob_info info;
 	memset(&info, 0, sizeof info);
-	info.len = htonl(len);
+	info.len = to_be32(len);
 
 	size_t offset = alloc_chunk(btree, sizeof info + len);
 
@@ -167,7 +187,7 @@ static size_t split_table(struct btree *btree, struct btree_table *table,
 			  uint8_t *sha1, size_t *offset)
 {
 	memcpy(sha1, table->items[TABLE_SIZE / 2].sha1, SHA1_LENGTH);
-	*offset = ntohl(table->items[TABLE_SIZE / 2].offset);
+	*offset = from_be32(table->items[TABLE_SIZE / 2].offset);
 
 	struct btree_table new_table;
 	memset(&new_table, 0, sizeof new_table);
@@ -190,7 +210,7 @@ static size_t collapse(struct btree *btree, size_t table_offset)
 	struct btree_table table;
 	read_table(btree, &table, table_offset);
 	if (table.size == 0) {
-		size_t ret = ntohl(table.items[0].child);
+		size_t ret = from_be32(table.items[0].child);
 		free_chunk(btree, table_offset, sizeof table);
 		return ret;
 	}
@@ -207,12 +227,12 @@ static size_t take_smallest(struct btree *btree, size_t table_offset,
 	read_table(btree, &table, table_offset);
 
 	size_t offset = 0;
-	size_t child = ntohl(table.items[0].child);
+	size_t child = from_be32(table.items[0].child);
 	if (child == 0) {
 		offset = remove_table(btree, &table, 0, sha1);
 	} else {
 		offset = take_smallest(btree, child, sha1);
-		table.items[0].child = htonl(collapse(btree, child));
+		table.items[0].child = to_be32(collapse(btree, child));
 	}
 	write_table(btree, &table, table_offset);
 	return offset;
@@ -225,12 +245,12 @@ static size_t take_largest(struct btree *btree, size_t table_offset,
 	read_table(btree, &table, table_offset);
 
 	size_t offset = 0;
-	size_t child = ntohl(table.items[table.size].child);
+	size_t child = from_be32(table.items[table.size].child);
 	if (child == 0) {
 		offset = remove_table(btree, &table, table.size - 1, sha1);
 	} else {
 		offset = take_largest(btree, child, sha1);
-		table.items[table.size].child = htonl(collapse(btree, child));
+		table.items[table.size].child = to_be32(collapse(btree, child));
 	}
 	write_table(btree, &table, table_offset);
 	return offset;
@@ -241,31 +261,31 @@ static size_t remove_table(struct btree *btree, struct btree_table *table,
 {
 	if (sha1)
 		memcpy(sha1, table->items[i].sha1, SHA1_LENGTH);
-	size_t offset = ntohl(table->items[i].offset);
-	size_t left_child = ntohl(table->items[i].child);
-	size_t right_child = ntohl(table->items[i + 1].child);
+	size_t offset = from_be32(table->items[i].offset);
+	size_t left_child = from_be32(table->items[i].child);
+	size_t right_child = from_be32(table->items[i + 1].child);
 
 	if (left_child && right_child) {
 		uint8_t new_sha1[SHA1_LENGTH];
 		size_t new_offset;
 		if (rand() & 1) {
 			new_offset = take_largest(btree, left_child, new_sha1);
-			table->items[i].child = htonl(collapse(btree, left_child));
+			table->items[i].child = to_be32(collapse(btree, left_child));
 		} else {
 			new_offset = take_smallest(btree, right_child, new_sha1);
-			table->items[i + 1].child = htonl(collapse(btree, right_child));
+			table->items[i + 1].child = to_be32(collapse(btree, right_child));
 		}
 		memcpy(table->items[i].sha1, new_sha1, SHA1_LENGTH);
-		table->items[i].offset = htonl(new_offset);
+		table->items[i].offset = to_be32(new_offset);
 	} else {
 		memmove(&table->items[i], &table->items[i + 1],
 			(table->size - i) * sizeof(struct btree_item));
 		table->size--;
 
 		if (left_child)
-			table->items[i].child = htonl(left_child);
+			table->items[i].child = to_be32(left_child);
 		else
-			table->items[i].child = htonl(right_child);
+			table->items[i].child = to_be32(right_child);
 	}
 	return offset;
 }
@@ -282,7 +302,7 @@ static size_t insert_table(struct btree *btree, size_t table_offset,
 		int cmp = memcmp(sha1, table.items[i].sha1, SHA1_LENGTH);
 		if (cmp == 0) {
 			/* already in the table */
-			return ntohl(table.items[i].offset);
+			return from_be32(table.items[i].offset);
 		}
 		if (cmp < 0)
 			right = i;
@@ -292,7 +312,7 @@ static size_t insert_table(struct btree *btree, size_t table_offset,
 	size_t i = left;
 
 	size_t offset = 0;
-	size_t child_offset = ntohl(table.items[i].child);
+	size_t child_offset = from_be32(table.items[i].child);
 	size_t right_child = 0;
 	size_t ret = 0;
 	if (child_offset) {
@@ -312,9 +332,9 @@ static size_t insert_table(struct btree *btree, size_t table_offset,
 	memmove(&table.items[i + 1], &table.items[i],
 		(table.size - i) * sizeof(struct btree_item));
 	memcpy(table.items[i].sha1, sha1, SHA1_LENGTH);
-	table.items[i].offset = htonl(offset);
-	table.items[i].child = htonl(child_offset);
-	table.items[i + 1].child = htonl(right_child);
+	table.items[i].offset = to_be32(offset);
+	table.items[i].child = to_be32(child_offset);
+	table.items[i + 1].child = to_be32(right_child);
 	write_table(btree, &table, table_offset);
 	return ret;
 }
@@ -353,10 +373,10 @@ static size_t delete_table(struct btree *btree, size_t table_offset,
 	/* not found - recursion */
 	size_t i = left;
 	size_t ret = 0;
-	size_t child = ntohl(table.items[i].child);
+	size_t child = from_be32(table.items[i].child);
 	ret = delete_table(btree, child, sha1);
 	if (ret)
-		table.items[i].child = htonl(collapse(btree, child));
+		table.items[i].child = to_be32(collapse(btree, child));
 
 	if (ret == 0 && in_allocator && i < table.size) {
 		/* remove the next largest */
@@ -390,9 +410,9 @@ size_t insert_toplevel(struct btree *btree, size_t *table_offset,
 
 	new_table.size = 1;
 	memcpy(new_table.items[0].sha1, sha1, SHA1_LENGTH);
-	new_table.items[0].offset = htonl(offset);
-	new_table.items[0].child = htonl(*table_offset);
-	new_table.items[1].child = htonl(right_child);
+	new_table.items[0].offset = to_be32(offset);
+	new_table.items[0].child = to_be32(*table_offset);
+	new_table.items[1].child = to_be32(right_child);
 
 	size_t new_table_offset = alloc_chunk(btree, sizeof new_table);
 	write_table(btree, &new_table, new_table_offset);
@@ -422,14 +442,14 @@ static size_t lookup(struct btree *btree, size_t table_offset,
 			int cmp = memcmp(sha1, table.items[i].sha1, SHA1_LENGTH);
 			if (cmp == 0) {
 				/* found */
-				return ntohl(table.items[i].offset);
+				return from_be32(table.items[i].offset);
 			}
 			if (cmp < 0)
 				right = i;
 			else
 				left = i + 1;
 		}
-		table_offset = ntohl(table.items[left].child);
+		table_offset = from_be32(table.items[left].child);
 	}
 	return 0;
 }
@@ -444,7 +464,7 @@ void *btree_get(struct btree *btree, const uint8_t *sha1, size_t *len)
 	struct blob_info info;
 	if (fread(&info, 1, sizeof info, btree->file) != sizeof info)
 		return NULL;
-	*len = ntohl(info.len);
+	*len = from_be32(info.len);
 
 	void *data = malloc(*len);
 	if (data == NULL)
@@ -470,7 +490,7 @@ int btree_delete(struct btree *btree, const uint8_t *sha1)
 	if (fread(&info, 1, sizeof info, btree->file) != sizeof info)
 		return 0;
 
-	free_chunk(btree, offset, sizeof info + ntohl(info.len));
+	free_chunk(btree, offset, sizeof info + from_be32(info.len));
 	write_super(btree);
 	return 0;
 }

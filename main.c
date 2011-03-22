@@ -6,7 +6,7 @@
 #include <sys/stat.h>
 #include <time.h>
 
-int file_exists(const char *path)
+static int file_exists(const char *path)
 {
         struct stat st;
         return stat(path, &st) == 0;
@@ -14,12 +14,12 @@ int file_exists(const char *path)
 
 static struct timespec start;
 
-void start_timer(void)
+static void start_timer(void)
 {
         clock_gettime(CLOCK_MONOTONIC, &start);
 }
 
-double get_timer(void)
+static double get_timer(void)
 {
         struct timespec end;
         clock_gettime(CLOCK_MONOTONIC, &end);
@@ -28,7 +28,7 @@ double get_timer(void)
         return seconds + (double) nseconds / 1.0e9;
 }
 
-int main()
+int main(int argc, char **argv)
 {
 	const char *fname = "test.dat";
 
@@ -54,18 +54,18 @@ int main()
 
 	start_timer();
 	for (i = 0; i < 100000; ++i) {
-		sprintf(sha1, "foobar %zd", i);
+		sprintf((char *) sha1, "foobar %zd", i);
 		sprintf(val, "value %zd", i*i);
 		btree_insert(&btree, sha1, val, strlen(val));
 	}
 	printf("insert: %.6f\n", get_timer());
 
 	memset(sha1, 0, sizeof sha1);
-	strcpy(sha1, "foobar ");
+	strcpy((char *) sha1, "foobar ");
 
 	start_timer();
 	for (i = 0; i < 100000; ++i) {
-		sprintf(sha1 + 7, "%zd", i);
+		sprintf((char *) sha1 + 7, "%zd", i);
 		size_t len;
 		void *data = btree_get(&btree, sha1, &len);
 		if (data == NULL)
@@ -76,13 +76,13 @@ int main()
 
 	memset(sha1, 0, sizeof sha1);
 	for (i = 0; i < 100000/2; i++) {
-		sprintf(sha1, "foobar %zd", i);
+		sprintf((char *) sha1, "foobar %zd", i);
 		if (btree_delete(&btree, sha1))
 			printf("DELETE %zd\n", i);
 	}
 	memset(sha1, 0, sizeof sha1);
 	for (i = 0; i < 100000/2; i++) {
-		sprintf(sha1, "foobar %zd", i);
+		sprintf((char *) sha1, "foobar %zd", i);
 		sprintf(val, "testingtestingtesting%zd", i*i);
 		btree_insert(&btree, sha1, val, strlen(val));
 	}
@@ -91,7 +91,7 @@ int main()
 
 	start_timer();
 	for (i = 0; i < 100000; i++) {
-		sprintf(sha1, "foobar %zd", i);
+		sprintf((char *) sha1, "foobar %zd", i);
 		if (btree_delete(&btree, sha1))
 			printf("DELETE %zd\n", i);
 	}

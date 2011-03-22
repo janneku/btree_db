@@ -1,15 +1,30 @@
 #ifndef _BTREE_H
 #define _BTREE_H
 
+#ifdef __CHECKER__
+#define FORCE           __attribute__((force))
+#else
+#define FORCE
+#endif
+
+#ifdef __CHECKER__
+#define BITWISE         __attribute__((bitwise))
+#else
+#define BITWISE
+#endif
+
 #include <stdio.h>
 #include <stdint.h>
+
+typedef uint16_t BITWISE __be16; /* big endian, 16 bits */
+typedef uint32_t BITWISE __be32; /* big endian, 32 bits */
 
 #define SHA1_LENGTH	20
 
 struct btree_item {
 	uint8_t sha1[SHA1_LENGTH];
-	uint32_t offset;
-	uint32_t child;
+	__be32 offset;
+	__be32 child;
 } __attribute__((packed));
 
 #define TABLE_SIZE	((4096 - 4) / sizeof(struct btree_item))
@@ -20,12 +35,12 @@ struct btree_table {
 };
 
 struct blob_info {
-	uint32_t len;
+	__be32 len;
 };
 
 struct btree_super {
-	uint32_t top;
-	uint32_t free_top;
+	__be32 top;
+	__be32 free_top;
 };
 
 struct btree {
