@@ -2,9 +2,10 @@
 #include <assert.h>
 #include <string.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <fcntl.h>
 #include <arpa/inet.h> /* htonl/ntohl */
 
-#define ALIGNMENT	8
 #define FREE_QUEUE_LEN	64
 
 struct chunk {
@@ -73,8 +74,7 @@ static struct btree_table *get_table(struct btree *btree, size_t offset)
 {
 	assert(offset != 0);
 
-	struct btree_cache *slot =
-		&btree->cache[(offset / ALIGNMENT) % CACHE_SLOTS];
+	struct btree_cache *slot = &btree->cache[offset % CACHE_SLOTS];
 	if (slot->offset == offset) {
 		slot->offset = 0;
 		return slot->table;
@@ -82,8 +82,8 @@ static struct btree_table *get_table(struct btree *btree, size_t offset)
 
 	struct btree_table *table = malloc(sizeof *table);
 
-	fseek(btree->file, offset, SEEK_SET);
-	if (fread(table, 1, sizeof *table, btree->file) != sizeof *table)
+	lseek(btree->fd, offset, SEEK_SET);
+	if (read(btree->fd, table, sizeof *table) != sizeof *table)
 		assert(0);
 	return table;
 }
@@ -93,8 +93,7 @@ static void put_table(struct btree *btree, struct btree_table *table,
 {
 	assert(offset != 0);
 
-	struct btree_cache *slot =
-		&btree->cache[(offset / ALIGNMENT) % CACHE_SLOTS];
+	struct btree_cache *slot = &btree->cache[offset % CACHE_SLOTS];
 	if (slot->offset)
 		free(slot->table);
 	slot->offset = offset;
@@ -106,8 +105,8 @@ static void flush_table(struct btree *btree, struct btree_table *table,
 {
 	assert(offset != 0);
 
-	fseek(btree->file, offset, SEEK_SET);
-	if (fwrite(table, 1, sizeof *table, btree->file) != sizeof *table)
+	lseek(btree->fd, offset, SEEK_SET);
+	if (write(btree->fd, table, sizeof *table) != sizeof *table)
 		assert(0);
 
 	put_table(btree, table, offset);
@@ -117,15 +116,17 @@ int btree_open(struct btree *btree, const char *fname)
 {
 	memset(btree, 0, sizeof(*btree));
 
-	btree->file = fopen(fname, "rb+");
-	if (btree->file == NULL)
+	btree->fd = open(fname, O_RDWR);
+	if (btree->fd < 0)
 		return -1;
 
 	struct btree_super super;
-	if (fread(&super, 1, sizeof(super), btree->file) != sizeof(super))
+	if (read(btree->fd, &super, sizeof(super)) != sizeof(super))
 		return -1;
 	btree->top = from_be32(super.top);
 	btree->free_top = from_be32(super.free_top);
+
+	btree->alloc = lseek(btree->fd, 0, SEEK_END);
 	return 0;
 }
 
@@ -135,16 +136,19 @@ int btree_creat(struct btree *btree, const char *fname)
 {
 	memset(btree, 0, sizeof(*btree));
 
-	btree->file = fopen(fname, "wb+");
-	if (btree->file == NULL)
+	btree->fd = open(fname, O_RDWR | O_TRUNC | O_CREAT, 0644);
+	if (btree->fd < 0)
 		return -1;
+
 	flush_super(btree);
+
+	btree->alloc = lseek(btree->fd, 0, SEEK_END);
 	return 0;
 }
 
 void btree_close(struct btree *btree)
 {
-	fclose(btree->file);
+	close(btree->fd);
 
 	size_t i;
 	for (i = 0; i < CACHE_SLOTS; ++i) {
@@ -160,12 +164,21 @@ static size_t delete_table(struct btree *btree, size_t table_offset,
 
 static size_t collapse(struct btree *btree, size_t table_offset);
 
+static size_t round_power2(size_t val)
+{
+	size_t i = 1;
+	while (i < val)
+		i <<= 1;
+	return i;
+}
+
 static void free_chunk(struct btree *btree, size_t offset, size_t len);
 
 static size_t alloc_chunk(struct btree *btree, size_t len)
 {
-	if (len % ALIGNMENT)
-		len += ALIGNMENT - len % ALIGNMENT;
+	assert(len > 0);
+
+	len = round_power2(len);
 
 	size_t offset = 0;
 	if (!in_allocator) {
@@ -179,18 +192,21 @@ static size_t alloc_chunk(struct btree *btree, size_t len)
 		if (offset) {
 			btree->free_top = collapse(btree, btree->free_top);
 			in_allocator = 0;
+
 			size_t free_len = from_be32(*(__be32 *)sha1);
-			if (free_len > len) {
-				free_chunk(btree, offset + len, free_len - len);
+			assert(free_len >= len);
+			assert(round_power2(free_len) == free_len);
+			while (free_len > len) {
+				free_len >>= 1;
+				free_chunk(btree, offset + free_len,
+						  free_len);
 			}
 		} else
 			in_allocator = 0;
 	}
 	if (offset == 0) {
-		fseek(btree->file, 0, SEEK_END);
-		offset = ftell(btree->file);
-		if (offset % ALIGNMENT)
-			offset += ALIGNMENT - offset % ALIGNMENT;
+		offset = btree->alloc;
+		btree->alloc += len;
 	}
 	return offset;
 }
@@ -200,7 +216,10 @@ size_t insert_toplevel(struct btree *btree, size_t *table_offset,
 
 static void free_chunk(struct btree *btree, size_t offset, size_t len)
 {
+	assert(len > 0);
 	assert(offset != 0);
+
+	len = round_power2(len);
 
 	if (in_allocator) {
 		if (free_queue_len >= FREE_QUEUE_LEN) {
@@ -212,8 +231,6 @@ static void free_chunk(struct btree *btree, size_t offset, size_t len)
 		chunk->len = len;
 		return;
 	}
-	if (len % ALIGNMENT)
-		len += ALIGNMENT - len % ALIGNMENT;
 
 	uint8_t sha1[SHA1_LENGTH];
 	memset(sha1, 0, sizeof sha1);
@@ -241,8 +258,8 @@ static void flush_super(struct btree *btree)
 	super.top = to_be32(btree->top);
 	super.free_top = to_be32(btree->free_top);
 
-	fseek(btree->file, 0, SEEK_SET);
-	if (fwrite(&super, 1, sizeof(super), btree->file) != sizeof(super))
+	lseek(btree->fd, 0, SEEK_SET);
+	if (write(btree->fd, &super, sizeof(super)) != sizeof(super))
 		assert(0);
 }
 
@@ -257,10 +274,10 @@ static size_t insert_data(struct btree *btree, const void *data, size_t len)
 
 	size_t offset = alloc_chunk(btree, sizeof info + len);
 
-	fseek(btree->file, offset, SEEK_SET);
-	if (fwrite(&info, 1, sizeof info, btree->file) != sizeof info)
+	lseek(btree->fd, offset, SEEK_SET);
+	if (write(btree->fd, &info, sizeof info) != sizeof info)
 		assert(0);
-	if (fwrite(data, 1, len, btree->file) != len)
+	if (write(btree->fd, data, len) != len)
 		assert(0);
 
 	return offset;
@@ -560,16 +577,16 @@ void *btree_get(struct btree *btree, const uint8_t *sha1, size_t *len)
 	if (offset == 0)
 		return NULL;
 
-	fseek(btree->file, offset, SEEK_SET);
+	lseek(btree->fd, offset, SEEK_SET);
 	struct blob_info info;
-	if (fread(&info, 1, sizeof info, btree->file) != sizeof info)
+	if (read(btree->fd, &info, sizeof info) != sizeof info)
 		return NULL;
 	*len = from_be32(info.len);
 
 	void *data = malloc(*len);
 	if (data == NULL)
 		return NULL;
-	if (fread(data, 1, *len, btree->file) != *len) {
+	if (read(btree->fd, data, *len) != *len) {
 		free(data);
 		data = NULL;
 	}
@@ -587,9 +604,9 @@ int btree_delete(struct btree *btree, const uint8_t *c_sha1)
 	btree->top = collapse(btree, btree->top);
 	flush_super(btree);
 
-	fseek(btree->file, offset, SEEK_SET);
+	lseek(btree->fd, offset, SEEK_SET);
 	struct blob_info info;
-	if (fread(&info, 1, sizeof info, btree->file) != sizeof info)
+	if (read(btree->fd, &info, sizeof info) != sizeof info)
 		return 0;
 
 	free_chunk(btree, offset, sizeof info + from_be32(info.len));

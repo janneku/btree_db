@@ -53,7 +53,8 @@ struct btree_super {
 struct btree {
 	size_t top;
 	size_t free_top;
-	FILE *file;
+	size_t alloc;
+	int fd;
 	struct btree_cache cache[CACHE_SLOTS];
 };
 
