@@ -6,6 +6,8 @@
 #include <sys/stat.h>
 #include <time.h>
 
+#define warning(fmt...)	fprintf(stderr, "WARNING: " fmt)
+
 static int file_exists(const char *path)
 {
         struct stat st;
@@ -46,12 +48,12 @@ int main(int argc, char **argv)
 
 	if (file_exists(fname)) {
 		if (btree_open(&btree, fname)) {
-			printf("Unable to open database\n");
+			warning("Unable to open database\n");
 			return 1;
 		}
 	} else {
 		if (btree_creat(&btree, fname)) {
-			printf("Unable to create database\n");
+			warning("Unable to create database\n");
 			return 1;
 		}
 	}
@@ -71,45 +73,57 @@ int main(int argc, char **argv)
 	if (strcmp(argv[1], "get") == 0) {
 		memset(sha1, 0, sizeof sha1);
 		strcpy((char *) sha1, "foobar ");
+		strcpy(val, "value ");
 
 		start_timer();
 		for (i = 0; i < COUNT; ++i) {
+			/* optimize a bit */
 			sprintf((char *) sha1 + 7, "%zd", i);
+			sprintf(val + 6, "%zd", i*i);
+
 			size_t len;
 			void *data = btree_get(&btree, sha1, &len);
-			if (data == NULL)
-				printf("%zd %p,%zd\n", i, data, len);
+			if (data == NULL) {
+				warning("not found: %zd\n", i);
+				continue;
+			}
+			if (len != strlen(val) || memcmp(val, data, len)) {
+				warning("data mismatch: %zd\n", i);
+			}
 			free(data);
 		}
 		printf("get: %.6f\n", get_timer());
-	}
 
-	if (strcmp(argv[1], "refill") == 0) {
+	} else if (strcmp(argv[1], "refill") == 0) {
+		/* delete half of the data, then add it back */
+
 		memset(sha1, 0, sizeof sha1);
 		for (i = 0; i < COUNT/2; i++) {
 			sprintf((char *) sha1, "foobar %zd", i);
 			if (btree_delete(&btree, sha1))
-				printf("DELETE %zd\n", i);
+				warning("not found: %zd\n", i);
 		}
+
 		memset(sha1, 0, sizeof sha1);
 		for (i = 0; i < COUNT/2; i++) {
 			sprintf((char *) sha1, "foobar %zd", i);
-			sprintf(val, "testingtestingtesting%zd", i*i);
+			sprintf(val, "value %zd", i*i);
 			btree_insert(&btree, sha1, val, strlen(val));
 		}
-	}
 
-	if (strcmp(argv[1], "delete") == 0) {
+	} else if (strcmp(argv[1], "delete") == 0) {
 		memset(sha1, 0, sizeof sha1);
 
 		start_timer();
 		for (i = 0; i < COUNT; i++) {
 			sprintf((char *) sha1, "foobar %zd", i);
 			if (btree_delete(&btree, sha1))
-				printf("DELETE %zd\n", i);
+				warning("not found: %zd\n", i);
 		}
 		printf("delete: %.6f\n", get_timer());
-	}
+
+	} else
+		warning("unknown command\n");
 
 	btree_close(&btree);
 
