@@ -21,17 +21,24 @@ typedef uint32_t BITWISE __be32; /* big endian, 32 bits */
 
 #define SHA1_LENGTH	20
 
+#define CACHE_SLOTS	23 /* prime */
+
 struct btree_item {
 	uint8_t sha1[SHA1_LENGTH];
 	__be32 offset;
 	__be32 child;
 } __attribute__((packed));
 
-#define TABLE_SIZE	((4096 - 4) / sizeof(struct btree_item))
+#define TABLE_SIZE	((4096 - 1) / sizeof(struct btree_item))
 
 struct btree_table {
 	struct btree_item items[TABLE_SIZE];
 	uint8_t size;
+} __attribute__((packed));
+
+struct btree_cache {
+	size_t offset;
+	struct btree_table *table;
 };
 
 struct blob_info {
@@ -47,6 +54,7 @@ struct btree {
 	size_t top;
 	size_t free_top;
 	FILE *file;
+	struct btree_cache cache[CACHE_SLOTS];
 };
 
 int btree_open(struct btree *btree, const char *file);
