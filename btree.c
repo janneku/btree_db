@@ -88,6 +88,7 @@ static struct btree_table *get_table(struct btree *btree, size_t offset)
 	return table;
 }
 
+/* Free a table acquired with 'alloc_table' or 'get_table' */
 static void put_table(struct btree *btree, struct btree_table *table,
 		      size_t offset)
 {
@@ -100,6 +101,7 @@ static void put_table(struct btree *btree, struct btree_table *table,
 	slot->table = table;
 }
 
+/* Write a table and free it */
 static void flush_table(struct btree *btree, struct btree_table *table,
 			size_t offset)
 {
@@ -112,6 +114,7 @@ static void flush_table(struct btree *btree, struct btree_table *table,
 	put_table(btree, table, offset);
 }
 
+/* Open an existing database file */
 int btree_open(struct btree *btree, const char *fname)
 {
 	memset(btree, 0, sizeof(*btree));
@@ -132,6 +135,7 @@ int btree_open(struct btree *btree, const char *fname)
 
 static void flush_super(struct btree *btree);
 
+/* Create and initialize a new database file */
 int btree_creat(struct btree *btree, const char *fname)
 {
 	memset(btree, 0, sizeof(*btree));
@@ -146,6 +150,7 @@ int btree_creat(struct btree *btree, const char *fname)
 	return 0;
 }
 
+/* Close a database file opened with 'btree_creat' or 'btree_open' */
 void btree_close(struct btree *btree)
 {
 	close(btree->fd);
@@ -164,6 +169,7 @@ static size_t delete_table(struct btree *btree, size_t table_offset,
 
 static size_t collapse(struct btree *btree, size_t table_offset);
 
+/* Return a value that is greater or equal to 'val' and is power-of-two. */
 static size_t round_power2(size_t val)
 {
 	size_t i = 1;
@@ -174,6 +180,7 @@ static size_t round_power2(size_t val)
 
 static void free_chunk(struct btree *btree, size_t offset, size_t len);
 
+/* Allocate a chunk from the database file */
 static size_t alloc_chunk(struct btree *btree, size_t len)
 {
 	assert(len > 0);
@@ -196,6 +203,8 @@ static size_t alloc_chunk(struct btree *btree, size_t len)
 			size_t free_len = from_be32(*(__be32 *)sha1);
 			assert(free_len >= len);
 			assert(round_power2(free_len) == free_len);
+
+			/* free extra space at the end of the chunk */
 			while (free_len > len) {
 				free_len >>= 1;
 				free_chunk(btree, offset + free_len,
@@ -205,6 +214,7 @@ static size_t alloc_chunk(struct btree *btree, size_t len)
 			in_allocator = 0;
 	}
 	if (offset == 0) {
+		/* not found, allocate from the end of the file */
 		offset = btree->alloc;
 		btree->alloc += len;
 	}
@@ -214,6 +224,7 @@ static size_t alloc_chunk(struct btree *btree, size_t len)
 size_t insert_toplevel(struct btree *btree, size_t *table_offset,
 		uint8_t *sha1, const void *data, size_t len);
 
+/* Mark a chunk as unused in the database file */
 static void free_chunk(struct btree *btree, size_t offset, size_t len)
 {
 	assert(len > 0);
@@ -283,6 +294,8 @@ static size_t insert_data(struct btree *btree, const void *data, size_t len)
 	return offset;
 }
 
+/* Split a table. The pivot item is stored to 'sha1' and 'offset'.
+   Returns offset to the new table. */
 static size_t split_table(struct btree *btree, struct btree_table *table,
 			  uint8_t *sha1, size_t *offset)
 {
@@ -303,6 +316,7 @@ static size_t split_table(struct btree *btree, struct btree_table *table,
 	return new_table_offset;
 }
 
+/* Try to collapse the given table. Returns a new table offset. */
 static size_t collapse(struct btree *btree, size_t table_offset)
 {
 	struct btree_table *table = get_table(btree, table_offset);
@@ -319,6 +333,8 @@ static size_t collapse(struct btree *btree, size_t table_offset)
 static size_t remove_table(struct btree *btree, struct btree_table *table,
 			   size_t i, uint8_t *sha1);
 
+/* Find and remove the smallest item from the given table. The key of the item
+   is stored to 'sha1'. Returns offset to the item */
 static size_t take_smallest(struct btree *btree, size_t table_offset,
 			      uint8_t *sha1)
 {
@@ -337,6 +353,8 @@ static size_t take_smallest(struct btree *btree, size_t table_offset,
 	return offset;
 }
 
+/* Find and remove the largest item from the given table. The key of the item
+   is stored to 'sha1'. Returns offset to the item */
 static size_t take_largest(struct btree *btree, size_t table_offset,
 			     uint8_t *sha1)
 {
@@ -356,6 +374,8 @@ static size_t take_largest(struct btree *btree, size_t table_offset,
 	return offset;
 }
 
+/* Remove an item in position 'i' from the given table. The key of the
+   removed item is stored to 'sha1'. Returns offset to the item. */
 static size_t remove_table(struct btree *btree, struct btree_table *table,
 			     size_t i, uint8_t *sha1)
 {
@@ -369,6 +389,8 @@ static size_t remove_table(struct btree *btree, struct btree_table *table,
 	size_t right_child = from_be32(table->items[i + 1].child);
 
 	if (left_child && right_child) {
+	        /* replace the removed item by taking an item from one of the
+	           child tables */
 		size_t new_offset;
 		if (rand() & 1) {
 			new_offset = take_largest(btree, left_child,
@@ -396,6 +418,8 @@ static size_t remove_table(struct btree *btree, struct btree_table *table,
 	return offset;
 }
 
+/* Insert a new item with key 'sha1' with the contents in 'data' to the given
+   table. Returns offset to the new item. */
 static size_t insert_table(struct btree *btree, size_t table_offset,
 			 uint8_t *sha1, const void *data, size_t len)
 {
@@ -458,6 +482,8 @@ static void dump_sha1(const uint8_t *sha1)
 		printf("%02x", sha1[i]);
 }
 
+/* Remove a item with key 'sha1' from the given table. The offset to the
+   removed item is returned. */
 static size_t delete_table(struct btree *btree, size_t table_offset,
 			   uint8_t *sha1)
 {
@@ -535,6 +561,8 @@ size_t insert_toplevel(struct btree *btree, size_t *table_offset,
 	return ret;
 }
 
+/* Insert a new item with key 'sha1' with the contents in 'data' to the
+   database file. */
 void btree_insert(struct btree *btree, const uint8_t *c_sha1, const void *data,
 		  size_t len)
 {
@@ -544,6 +572,8 @@ void btree_insert(struct btree *btree, const uint8_t *c_sha1, const void *data,
 	flush_super(btree);
 }
 
+/* Look up item with the given key 'sha1' in the given table. Returns offset
+   to the item. */
 static size_t lookup(struct btree *btree, size_t table_offset,
 		     const uint8_t *sha1)
 {
@@ -571,6 +601,8 @@ static size_t lookup(struct btree *btree, size_t table_offset,
 	return 0;
 }
 
+/* Look up item with the given key 'sha1' in the database file. Length of the
+   item is stored in 'len'. Returns a pointer to the contents of the item. */
 void *btree_get(struct btree *btree, const uint8_t *sha1, size_t *len)
 {
 	size_t offset = lookup(btree, btree->top, sha1);
@@ -593,6 +625,7 @@ void *btree_get(struct btree *btree, const uint8_t *sha1, size_t *len)
 	return data;
 }
 
+/* Remove item with the given key 'sha1' from the database file */
 int btree_delete(struct btree *btree, const uint8_t *c_sha1)
 {
 	uint8_t sha1[SHA1_LENGTH];
