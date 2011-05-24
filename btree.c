@@ -117,14 +117,14 @@ static void flush_table(struct btree *btree, struct btree_table *table,
 /* Open an existing database file */
 int btree_open(struct btree *btree, const char *fname)
 {
-	memset(btree, 0, sizeof(*btree));
+	memset(btree, 0, sizeof *btree);
 
 	btree->fd = open(fname, O_RDWR);
 	if (btree->fd < 0)
 		return -1;
 
 	struct btree_super super;
-	if (read(btree->fd, &super, sizeof(super)) != sizeof(super))
+	if (read(btree->fd, &super, sizeof super) != sizeof super)
 		return -1;
 	btree->top = from_be32(super.top);
 	btree->free_top = from_be32(super.free_top);
@@ -138,7 +138,7 @@ static void flush_super(struct btree *btree);
 /* Create and initialize a new database file */
 int btree_creat(struct btree *btree, const char *fname)
 {
-	memset(btree, 0, sizeof(*btree));
+	memset(btree, 0, sizeof *btree);
 
 	btree->fd = open(fname, O_RDWR | O_TRUNC | O_CREAT, 0644);
 	if (btree->fd < 0)
@@ -270,7 +270,7 @@ static void flush_super(struct btree *btree)
 	super.free_top = to_be32(btree->free_top);
 
 	lseek(btree->fd, 0, SEEK_SET);
-	if (write(btree->fd, &super, sizeof(super)) != sizeof(super))
+	if (write(btree->fd, &super, sizeof super) != sizeof super)
 		assert(0);
 }
 
