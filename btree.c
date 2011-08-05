@@ -6,6 +6,9 @@
 #include <fcntl.h>
 #include <arpa/inet.h> /* htonl/ntohl */
 
+#define DB_NAME "db.db"
+#define IDX_NAME "db.idx"
+
 #define FREE_QUEUE_LEN	64
 
 struct chunk {
@@ -115,11 +118,11 @@ static void flush_table(struct btree *btree, struct btree_table *table,
 }
 
 /* Open an existing database file */
-int btree_open(struct btree *btree, const char *fname)
+int btree_open(struct btree *btree)
 {
 	memset(btree, 0, sizeof *btree);
 
-	btree->fd = open(fname, O_RDWR);
+	btree->fd = open(IDX_NAME, O_RDWR);
 	if (btree->fd < 0)
 		return -1;
 
@@ -136,11 +139,11 @@ int btree_open(struct btree *btree, const char *fname)
 static void flush_super(struct btree *btree);
 
 /* Create and initialize a new database file */
-int btree_creat(struct btree *btree, const char *fname)
+int btree_creat(struct btree *btree)
 {
 	memset(btree, 0, sizeof *btree);
 
-	btree->fd = open(fname, O_RDWR | O_TRUNC | O_CREAT, 0644);
+	btree->fd = open(IDX_NAME, O_RDWR | O_TRUNC | O_CREAT, 0644);
 	if (btree->fd < 0)
 		return -1;
 

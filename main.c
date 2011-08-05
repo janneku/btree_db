@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <openssl/sha.h>
 #include <sys/stat.h>
 #include <time.h>
 
@@ -30,11 +29,11 @@ static double get_timer(void)
         return seconds + (double) nseconds / 1.0e9;
 }
 
-#define COUNT		1000000
+#define COUNT		1000
 
 int main(int argc, char **argv)
 {
-	const char *fname = "test.dat";
+	const char *fname = "db.idx";
 
 	if (argc < 2)
 		return 0;
@@ -47,12 +46,12 @@ int main(int argc, char **argv)
 	size_t i;
 
 	if (file_exists(fname)) {
-		if (btree_open(&btree, fname)) {
+		if (btree_open(&btree)) {
 			warning("Unable to open database\n");
 			return 1;
 		}
 	} else {
-		if (btree_creat(&btree, fname)) {
+		if (btree_creat(&btree)) {
 			warning("Unable to create database\n");
 			return 1;
 		}

@@ -58,8 +58,8 @@ struct btree {
 	struct btree_cache cache[CACHE_SLOTS];
 };
 
-int btree_open(struct btree *btree, const char *file);
-int btree_creat(struct btree *btree, const char *file);
+int btree_open(struct btree *btree);
+int btree_creat(struct btree *btree);
 void btree_close(struct btree *btree);
 void btree_insert(struct btree *btree, const uint8_t *sha1, const void *data,
 		  size_t len);
