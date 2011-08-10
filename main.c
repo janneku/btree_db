@@ -29,10 +29,11 @@ static double get_timer(void)
         return seconds + (double) nseconds / 1.0e9;
 }
 
-#define COUNT		1000
+#define COUNT		3000000
 
 int main(int argc, char **argv)
 {
+
 	const char *fname = "db.idx";
 
 	if (argc < 2)
@@ -42,7 +43,7 @@ int main(int argc, char **argv)
 
 	struct btree btree;
 	uint8_t sha1[SHA1_LENGTH];
-	char val[100];
+	char val[1024]="abddddddddddddddddddddddddddddddddddddddabdddddddddddddddddddddddddddddddddddddd";
 	size_t i;
 
 	if (file_exists(fname)) {
@@ -62,9 +63,13 @@ int main(int argc, char **argv)
 
 		start_timer();
 		for (i = 0; i < COUNT; ++i) {
-			sprintf((char *) sha1, "foobar %zd", i);
-			sprintf(val, "value %zd", i*i);
+			sprintf((char *) sha1, "abcdefg%d", i);
 			btree_insert(&btree, sha1, val, strlen(val));
+			if((i%10000)==0)
+			{
+				fprintf(stderr,"finished %d ops%30s\r",i,"");
+				fflush(stderr);
+			}
 		}
 		printf("insert: %.6f\n", get_timer());
 	}
@@ -75,21 +80,19 @@ int main(int argc, char **argv)
 		strcpy(val, "value ");
 
 		start_timer();
-		for (i = 0; i < COUNT; ++i) {
+		for (i = 1000; i < COUNT; ++i) {
 			/* optimize a bit */
-			sprintf((char *) sha1 + 7, "%zd", i);
-			sprintf(val + 6, "%zd", i*i);
+			sprintf(sha1, "abcdefg%d", (rand()%i));
 
 			size_t len;
 			void *data = btree_get(&btree, sha1, &len);
-			if (data == NULL) {
-				warning("not found: %zd\n", i);
-				continue;
-			}
-			if (len != strlen(val) || memcmp(val, data, len)) {
-				warning("data mismatch: %zd\n", i);
-			}
 			free(data);
+
+			 if((i%10000)==0)
+			{
+				fprintf(stderr,"finished %d ops%30s\r",i,"");
+				fflush(stderr);
+			}     
 		}
 		printf("get: %.6f\n", get_timer());
 
