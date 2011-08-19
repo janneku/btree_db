@@ -49,24 +49,7 @@ static inline uint64_t ntoh64(uint64_t x)
 #endif
 }
 
-/* 15 times faster than gcc's memcmp on x86-64 */
-static int cmp_sha1(const uint8_t *a, const uint8_t *b)
-{
-	/* first 16 bytes */
-	const uint64_t *ap = (const void *) a;
-	const uint64_t *bp = (const void *) b;
-	if (*ap != *bp)
-		return ntoh64(*ap) < ntoh64(*bp) ? -1 : 1;
-	if (ap[1] != bp[1])
-		return ntoh64(ap[1]) < ntoh64(bp[1]) ? -1 : 1;
-
-	/* final 4 bytes */
-	const uint32_t *af = (const void *) (a + 16);
-	const uint32_t *bf = (const void *) (b + 16);
-	return ntohl(*bf) - ntohl(*af);
-}
-
-static struct btree_table *alloc_table(struct btree *btree)
+static struct btree_table *alloc_table()
 {
 	struct btree_table *table = malloc(sizeof *table);
 	memset(table, 0, sizeof *table);
@@ -186,7 +169,6 @@ static void free_chunk(struct btree *btree, size_t offset, size_t len);
 /* Allocate a chunk from the database file */
 static size_t alloc_chunk(struct btree *btree, size_t len)
 {
-	assert(len > 0);
 
 	len = round_power2(len);
 
@@ -286,7 +268,7 @@ static size_t insert_data(struct btree *btree, const void *data, size_t len)
 	memset(&info, 0, sizeof info);
 	info.len = to_be32(len);
 
-	size_t offset = alloc_chunk(btree, sizeof info + len);
+	size_t offset =alloc_chunk(btree,sizeof info + len);
 
 	lseek(btree->fd, offset, SEEK_SET);
 	if (write(btree->fd, &info, sizeof info) != sizeof info)
@@ -313,7 +295,7 @@ static size_t split_table(struct btree *btree, struct btree_table *table,
 	memcpy(new_table->items, &table->items[TABLE_SIZE / 2 + 1],
 		(new_table->size + 1) * sizeof(struct btree_item));
 
-	size_t new_table_offset = alloc_chunk(btree, sizeof *new_table);
+	size_t new_table_offset =alloc_chunk(btree, sizeof *new_table);
 	flush_table(btree, new_table, new_table_offset);
 
 	return new_table_offset;
@@ -432,7 +414,7 @@ static size_t insert_table(struct btree *btree, size_t table_offset,
 	size_t left = 0, right = table->size;
 	while (left < right) {
 		size_t i = (left + right) / 2;
-		int cmp = cmp_sha1(sha1, table->items[i].sha1);
+		int cmp = strcmp((const char*)sha1, (const char*)table->items[i].sha1);
 		if (cmp == 0) {
 			/* already in the table */
 			size_t ret = from_be32(table->items[i].offset);
@@ -497,7 +479,7 @@ static size_t delete_table(struct btree *btree, size_t table_offset,
 	size_t left = 0, right = table->size;
 	while (left < right) {
 		size_t i = (left + right) / 2;
-		int cmp = cmp_sha1(sha1, table->items[i].sha1);
+		int cmp = strcmp((const char*)sha1, (const char*)table->items[i].sha1);
 		if (cmp == 0) {
 			/* found */
 			size_t ret = remove_table(btree, table, i, sha1);
@@ -557,7 +539,7 @@ size_t insert_toplevel(struct btree *btree, size_t *table_offset,
 	new_table->items[0].child = to_be32(*table_offset);
 	new_table->items[1].child = to_be32(right_child);
 
-	size_t new_table_offset = alloc_chunk(btree, sizeof *new_table);
+	size_t new_table_offset =alloc_chunk(btree, sizeof *new_table);
 	flush_table(btree, new_table, new_table_offset);
 
 	*table_offset = new_table_offset;
@@ -585,7 +567,7 @@ static size_t lookup(struct btree *btree, size_t table_offset,
 		size_t left = 0, right = table->size, i;
 		while (left < right) {
 			i = (left + right) / 2;
-			int cmp = cmp_sha1(sha1, table->items[i].sha1);
+			int cmp = strcmp((const char*)sha1, (const char*)table->items[i].sha1);
 			if (cmp == 0) {
 				/* found */
 				size_t ret = from_be32(table->items[i].offset);

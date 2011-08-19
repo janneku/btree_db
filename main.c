@@ -29,7 +29,7 @@ static double get_timer(void)
         return seconds + (double) nseconds / 1.0e9;
 }
 
-#define COUNT		3000000
+#define COUNT		4000000
 
 int main(int argc, char **argv)
 {
@@ -58,13 +58,14 @@ int main(int argc, char **argv)
 		}
 	}
 
-	if (strcmp(argv[1], "insert") == 0) {
-		memset(sha1, 0, sizeof sha1);
+	if (strcmp(argv[1], "add") == 0) {
 
+		int v_len=strlen(val);
 		start_timer();
 		for (i = 0; i < COUNT; ++i) {
 			sprintf((char *) sha1, "abcdefg%d", i);
-			btree_insert(&btree, sha1, val, strlen(val));
+			//sprintf((char *) val, "abddddddddddddddddddddddddddddddddddddddabdddddddddddddddddddddddddddddddddddddd%d", i);
+			btree_insert(&btree, sha1, val, v_len);
 			if((i%10000)==0)
 			{
 				fprintf(stderr,"finished %d ops%30s\r",i,"");
@@ -75,17 +76,25 @@ int main(int argc, char **argv)
 	}
 
 	if (strcmp(argv[1], "get") == 0) {
-		memset(sha1, 0, sizeof sha1);
-		strcpy((char *) sha1, "foobar ");
-		strcpy(val, "value ");
 
+		int all=0;
 		start_timer();
-		for (i = 1000; i < COUNT; ++i) {
+		for (i = 300000; i <390000 ; ++i) 
+		{
 			/* optimize a bit */
-			sprintf(sha1, "abcdefg%d", (rand()%i));
+			sprintf(sha1, "abcdefg%d", random()%(i+1));
+			//sprintf(sha1, "abcdefg71", 0);
 
 			size_t len;
 			void *data = btree_get(&btree, sha1, &len);
+			if(data!=NULL)
+			{
+				//printf("%s\n",data);
+				all++;
+			}
+			else
+				printf("not found:%s\n",sha1);
+
 			free(data);
 
 			 if((i%10000)==0)
@@ -95,6 +104,7 @@ int main(int argc, char **argv)
 			}     
 		}
 		printf("get: %.6f\n", get_timer());
+		printf("all:%d\n",all);
 
 	} else if (strcmp(argv[1], "refill") == 0) {
 		/* delete half of the data, then add it back */
