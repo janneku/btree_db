@@ -428,7 +428,7 @@ static size_t insert_table(struct btree *btree, size_t table_offset,
 
 	size_t left = 0, right = table->size;
 	while (left < right) {
-		size_t i = (left + right) / 2;
+		size_t i = (right - left) / 2 + left;
 		int cmp = cmp_sha1(sha1, table->items[i].sha1);
 		if (cmp == 0) {
 			/* already in the table */
@@ -493,7 +493,7 @@ static size_t delete_table(struct btree *btree, size_t table_offset,
 
 	size_t left = 0, right = table->size;
 	while (left < right) {
-		size_t i = (left + right) / 2;
+		size_t i = (right - left) / 2 + left;
 		int cmp = cmp_sha1(sha1, table->items[i].sha1);
 		if (cmp == 0) {
 			/* found */
@@ -581,7 +581,7 @@ static size_t lookup(struct btree *btree, size_t table_offset,
 		struct btree_table *table = get_table(btree, table_offset);
 		size_t left = 0, right = table->size, i;
 		while (left < right) {
-			i = (left + right) / 2;
+			i = (right - left) / 2 + left;
 			int cmp = cmp_sha1(sha1, table->items[i].sha1);
 			if (cmp == 0) {
 				/* found */
