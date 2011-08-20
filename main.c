@@ -1,3 +1,10 @@
+/*
+ * Simple test program that demostrates how to use the btree.
+ *
+ * In a real program, the database key should be derived by hashing with
+ * SHA-1 from a binary string. In this example program, just 20-character
+ * fake keys are used.
+ */
 #include "btree.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -68,9 +75,8 @@ int main(int argc, char **argv)
 			btree_insert(&btree, sha1, val, strlen(val));
 		}
 		printf("insert: %.6f\n", get_timer());
-	}
 
-	if (strcmp(argv[1], "get") == 0) {
+	} else if (strcmp(argv[1], "get") == 0) {
 		memset(sha1, 0, sizeof sha1);
 		strcpy((char *) sha1, "foobar ");
 		strcpy(val, "value ");
@@ -122,8 +128,9 @@ int main(int argc, char **argv)
 		}
 		printf("delete: %.6f\n", get_timer());
 
-	} else
+	} else {
 		warning("unknown command\n");
+	}
 
 	btree_close(&btree);
 
