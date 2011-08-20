@@ -4,7 +4,13 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h>
+#ifdef _WIN32
+#include <winsock.h>
+#else
+/* Unix */
 #include <arpa/inet.h> /* htonl/ntohl */
+#define O_BINARY 0
+#endif
 
 #define FREE_QUEUE_LEN	64
 
@@ -118,7 +124,7 @@ int btree_open(struct btree *btree, const char *fname)
 {
 	memset(btree, 0, sizeof *btree);
 
-	btree->fd = open(fname, O_RDWR);
+	btree->fd = open(fname, O_RDWR | O_BINARY);
 	if (btree->fd < 0)
 		return -1;
 
@@ -138,7 +144,7 @@ int btree_creat(struct btree *btree, const char *fname)
 {
 	memset(btree, 0, sizeof *btree);
 
-	btree->fd = open(fname, O_RDWR | O_TRUNC | O_CREAT, 0644);
+	btree->fd = open(fname, O_RDWR | O_TRUNC | O_CREAT | O_BINARY, 0644);
 	if (btree->fd < 0)
 		return -1;
 
