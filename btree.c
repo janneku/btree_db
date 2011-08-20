@@ -108,7 +108,7 @@ static void flush_table(struct btree *btree, struct btree_table *table,
 	assert(offset != 0);
 
 	lseek(btree->fd, offset, SEEK_SET);
-	if (write(btree->fd, table, sizeof *table) != sizeof *table)
+	if (write(btree->fd, table, sizeof *table) != (ssize_t) sizeof *table)
 		assert(0);
 
 	put_table(btree, table, offset);
@@ -189,7 +189,7 @@ static size_t alloc_chunk(struct btree *btree, size_t len)
 		/* find free chunk with the larger or the same size */
 		uint8_t sha1[SHA1_LENGTH];
 		memset(sha1, 0, sizeof sha1);
-		*(__be32 *)sha1 = to_be32(len);
+		*(__be32 *) sha1 = to_be32(len);
 
 		in_allocator = 1;
 		offset = delete_table(btree, btree->free_top, sha1);
@@ -197,7 +197,7 @@ static size_t alloc_chunk(struct btree *btree, size_t len)
 			btree->free_top = collapse(btree, btree->free_top);
 			in_allocator = 0;
 
-			size_t free_len = from_be32(*(__be32 *)sha1);
+			size_t free_len = from_be32(*(__be32 *) sha1);
 			assert(free_len >= len);
 			assert(round_power2(free_len) == free_len);
 
@@ -242,9 +242,9 @@ static void free_chunk(struct btree *btree, size_t offset, size_t len)
 
 	uint8_t sha1[SHA1_LENGTH];
 	memset(sha1, 0, sizeof sha1);
-	*(__be32 *)sha1 = to_be32(len);
-	((uint32_t *)sha1)[1] = rand();
-	((uint32_t *)sha1)[2] = rand();
+	*(__be32 *) sha1 = to_be32(len);
+	((uint32_t *) sha1)[1] = rand();
+	((uint32_t *) sha1)[2] = rand();
 
 	in_allocator = 1;
 	insert_toplevel(btree, &btree->free_top, sha1, NULL, offset);
@@ -285,7 +285,7 @@ static size_t insert_data(struct btree *btree, const void *data, size_t len)
 	lseek(btree->fd, offset, SEEK_SET);
 	if (write(btree->fd, &info, sizeof info) != sizeof info)
 		assert(0);
-	if (write(btree->fd, data, len) != len)
+	if (write(btree->fd, data, len) != (ssize_t) len)
 		assert(0);
 
 	return offset;
@@ -472,12 +472,14 @@ static size_t insert_table(struct btree *btree, size_t table_offset,
 	return ret;
 }
 
+#if 0
 static void dump_sha1(const uint8_t *sha1)
 {
 	size_t i;
 	for (i = 0; i < SHA1_LENGTH; i++)
 		printf("%02x", sha1[i]);
 }
+#endif
 
 /* Remove a item with key 'sha1' from the given table. The offset to the
    removed item is returned. */
