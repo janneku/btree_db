@@ -114,7 +114,6 @@ static void flush_table(struct btree *btree, struct btree_table *table,
 	put_table(btree, table, offset);
 }
 
-/* Open an existing database file */
 int btree_open(struct btree *btree, const char *fname)
 {
 	memset(btree, 0, sizeof *btree);
@@ -135,7 +134,6 @@ int btree_open(struct btree *btree, const char *fname)
 
 static void flush_super(struct btree *btree);
 
-/* Create and initialize a new database file */
 int btree_creat(struct btree *btree, const char *fname)
 {
 	memset(btree, 0, sizeof *btree);
@@ -150,7 +148,6 @@ int btree_creat(struct btree *btree, const char *fname)
 	return 0;
 }
 
-/* Close a database file opened with 'btree_creat' or 'btree_open' */
 void btree_close(struct btree *btree)
 {
 	close(btree->fd);
@@ -561,8 +558,6 @@ size_t insert_toplevel(struct btree *btree, size_t *table_offset,
 	return ret;
 }
 
-/* Insert a new item with key 'sha1' with the contents in 'data' to the
-   database file. */
 void btree_insert(struct btree *btree, const uint8_t *c_sha1, const void *data,
 		  size_t len)
 {
@@ -601,8 +596,6 @@ static size_t lookup(struct btree *btree, size_t table_offset,
 	return 0;
 }
 
-/* Look up item with the given key 'sha1' in the database file. Length of the
-   item is stored in 'len'. Returns a pointer to the contents of the item. */
 void *btree_get(struct btree *btree, const uint8_t *sha1, size_t *len)
 {
 	size_t offset = lookup(btree, btree->top, sha1);
@@ -625,7 +618,6 @@ void *btree_get(struct btree *btree, const uint8_t *sha1, size_t *len)
 	return data;
 }
 
-/* Remove item with the given key 'sha1' from the database file */
 int btree_delete(struct btree *btree, const uint8_t *c_sha1)
 {
 	uint8_t sha1[SHA1_LENGTH];

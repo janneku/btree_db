@@ -58,12 +58,38 @@ struct btree {
 	struct btree_cache cache[CACHE_SLOTS];
 };
 
+/*
+ * Open an existing database file.
+ */
 int btree_open(struct btree *btree, const char *file);
+
+/*
+ * Create and initialize a new database file.
+ */
 int btree_creat(struct btree *btree, const char *file);
+
+/*
+ * Close a database file opened with btree_creat() or btree_open().
+ */
 void btree_close(struct btree *btree);
+
+/*
+ * Insert a new item with key 'sha1' with the contents in 'data' to the
+ * database file.
+ */
 void btree_insert(struct btree *btree, const uint8_t *sha1, const void *data,
 		  size_t len);
+
+/*
+ * Look up item with the given key 'sha1' in the database file. Length of the
+ * item is stored in 'len'. Returns a pointer to the contents of the item.
+ * The returned pointer should be released with free() after use.
+ */
 void *btree_get(struct btree *btree, const uint8_t *sha1, size_t *len);
+
+/*
+ * Remove item with the given key 'sha1' from the database file.
+ */
 int btree_delete(struct btree *btree, const uint8_t *sha1);
 
 #endif
