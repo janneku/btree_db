@@ -3,3 +3,5 @@ Copyright 2011 Janne Kulmala <janne.t.kulmala@iki.fi>
 
 Program code is licensed with GNU LGPL 2.1. See COPYING.LGPL file.
 
+To create databases larger than 4 GB on 32-bit architectures, you must 
+enable 64-bit file offsets by compiling with -D_FILE_OFFSET_BITS=64.
