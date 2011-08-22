@@ -166,7 +166,8 @@ int btree_creat(struct btree *btree, const char *fname)
 
 	flush_super(btree);
 
-	btree->alloc = lseek64(btree->fd, 0, SEEK_END);
+	btree->alloc = sizeof(struct btree_super);
+	int end=lseek64(btree->fd, 0, SEEK_END);
 	return 0;
 }
 
