@@ -1,0 +1,4 @@
+Linux kernel coding style 
+(http://www.kernel.org/doc/Documentation/CodingStyle) with C-style 
+comments instead of C++ style. Also, extra braces around single line 
+statements are recommended for clarity.
