@@ -16,7 +16,7 @@
 
 struct chunk {
 	off_t offset;
-	off_t len;
+	size_t len;
 };
 
 static struct chunk free_queue[FREE_QUEUE_LEN];
@@ -149,8 +149,7 @@ int btree_open(struct btree *btree, const char *fname)
 		return -1;
 	btree->top = from_be64(super.top);
 	btree->free_top = from_be64(super.free_top);
-
-	btree->alloc = lseek(btree->fd, 0, SEEK_END);
+	btree->alloc = from_be64(super.alloc);
 	return 0;
 }
 
@@ -164,9 +163,9 @@ int btree_creat(struct btree *btree, const char *fname)
 	if (btree->fd < 0)
 		return -1;
 
-	flush_super(btree);
+	btree->alloc = sizeof(struct btree_super);
 
-	btree->alloc = lseek(btree->fd, 0, SEEK_END);
+	flush_super(btree);
 	return 0;
 }
 
@@ -256,6 +255,10 @@ static off_t alloc_chunk(struct btree *btree, size_t len)
 		}
 		btree->alloc = offset + len;
 	}
+	flush_super(btree);
+
+	/* make sure the allocation tree is up-to-date before using the chunk */
+	fdatasync(btree->fd);
 	return offset;
 }
 
@@ -311,22 +314,34 @@ static void free_chunk(struct btree *btree, off_t offset, size_t len)
 	((uint32_t *) sha1)[3] = rand();
 	insert_toplevel(btree, &btree->free_top, sha1, NULL, offset);
 	in_allocator = 0;
+
+	flush_super(btree);
+
+	/*
+	 * make sure the allocation tree is up-to-date before removing
+	 * references to the chunk
+	 */
+	fdatasync(btree->fd);
 }
 
-static void flush_super(struct btree *btree)
+static void free_queued(struct btree *btree)
 {
-	/* free queued chunks */
 	size_t i;
 	for (i = 0; i < free_queue_len; ++i) {
 		struct chunk *chunk = &free_queue[i];
 		free_chunk(btree, chunk->offset, chunk->len);
 	}
 	free_queue_len = 0;
+}
 
+/* Write superblock to disk */
+static void flush_super(struct btree *btree)
+{
 	struct btree_super super;
 	memset(&super, 0, sizeof super);
 	super.top = to_be64(btree->top);
 	super.free_top = to_be64(btree->free_top);
+	super.alloc = to_be64(btree->alloc);
 
 	lseek(btree->fd, 0, SEEK_SET);
 	if (write(btree->fd, &super, sizeof super) != sizeof super) {
@@ -356,6 +371,10 @@ static off_t insert_data(struct btree *btree, const void *data, size_t len)
 		abort();
 	}
 
+	/*
+	 * make sure data is written before a reference is added to it
+	 */
+	fdatasync(btree->fd);
 	return offset;
 }
 
@@ -378,6 +397,8 @@ static off_t split_table(struct btree *btree, struct btree_table *table,
 	off_t new_table_offset = alloc_chunk(btree, sizeof *new_table);
 	flush_table(btree, new_table, new_table_offset);
 
+	/* make sure the table is written before a reference is added to it */
+	fdatasync(btree->fd);
 	return new_table_offset;
 }
 
@@ -385,14 +406,19 @@ static off_t split_table(struct btree *btree, struct btree_table *table,
 static off_t collapse(struct btree *btree, off_t table_offset)
 {
 	struct btree_table *table = get_table(btree, table_offset);
-	if (table->size == 0) {
-		off_t ret = from_be64(table->items[0].child);
-		free_chunk(btree, table_offset, sizeof *table);
+	if (table->size != 0) {
+		/* unable to collapse */
 		put_table(btree, table, table_offset);
-		return ret;
+		return table_offset;
 	}
+	off_t ret = from_be64(table->items[0].child);
 	put_table(btree, table, table_offset);
-	return table_offset;
+	/*
+	 * WARNING: this is dangerous as the chunk is added to allocation tree
+	 * before the references to it are removed!
+	 */
+	free_chunk(btree, table_offset, sizeof *table);
+	return ret;
 }
 
 static off_t remove_table(struct btree *btree, struct btree_table *table,
@@ -416,6 +442,9 @@ static off_t take_smallest(struct btree *btree, off_t table_offset,
 		table->items[0].child = to_be64(collapse(btree, child));
 	}
 	flush_table(btree, table, table_offset);
+
+	/* make sure the table is written before a reference is added to it */
+	fdatasync(btree->fd);
 	return offset;
 }
 
@@ -438,6 +467,9 @@ static off_t take_largest(struct btree *btree, off_t table_offset,
 			to_be64(collapse(btree, child));
 	}
 	flush_table(btree, table, table_offset);
+
+	/* make sure the table is written before a reference is added to it */
+	fdatasync(btree->fd);
 	return offset;
 }
 
@@ -530,6 +562,12 @@ static off_t insert_table(struct btree *btree, off_t table_offset,
 		right_child = split_table(btree, child, sha1, &offset);
 		/* flush just in case changes happened */
 		flush_table(btree, child, left_child);
+
+		/*
+		 * make sure the table is written before a reference is added
+		 * to it
+		 */
+		fdatasync(btree->fd);
 	} else {
 		ret = offset = insert_data(btree, data, len);
 	}
@@ -638,6 +676,9 @@ off_t insert_toplevel(struct btree *btree, off_t *table_offset,
 	flush_table(btree, new_table, new_table_offset);
 
 	*table_offset = new_table_offset;
+
+	/* make sure the table is written before a reference is added to it */
+	fdatasync(btree->fd);
 	return ret;
 }
 
@@ -649,6 +690,7 @@ void btree_insert(struct btree *btree, const uint8_t *c_sha1, const void *data,
 	memcpy(sha1, c_sha1, sizeof sha1);
 
 	insert_toplevel(btree, &btree->top, sha1, data, len);
+	free_queued(btree);
 	flush_super(btree);
 }
 
@@ -718,6 +760,7 @@ int btree_delete(struct btree *btree, const uint8_t *c_sha1)
 		return -1;
 
 	btree->top = collapse(btree, btree->top);
+	free_queued(btree);
 	flush_super(btree);
 
 	lseek(btree->fd, offset, SEEK_SET);
@@ -726,6 +769,7 @@ int btree_delete(struct btree *btree, const uint8_t *c_sha1)
 		return 0;
 
 	free_chunk(btree, offset, sizeof info + from_be32(info.len));
+	free_queued(btree);
 	flush_super(btree);
 	return 0;
 }

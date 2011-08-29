@@ -50,6 +50,7 @@ struct blob_info {
 struct btree_super {
 	__be64 top;
 	__be64 free_top;
+	__be64 alloc;
 } __attribute__((packed));
 
 struct btree {
