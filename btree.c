@@ -14,6 +14,9 @@
 
 #define FREE_QUEUE_LEN	64
 
+static int in_allocator = 0;
+static int delete_larger = 0;
+
 struct chunk {
 	off_t offset;
 	size_t len;
@@ -62,6 +65,26 @@ static inline uint64_t from_be64(__be64 x)
 #endif
 }
 
+
+
+
+static off_t delete_table(struct btree *btree, off_t table_offset,
+			   uint8_t *sha1);
+
+static off_t collapse(struct btree *btree, off_t table_offset);
+static void flush_super(struct btree *btree);
+static void free_chunk(struct btree *btree, off_t offset, size_t len);
+
+static off_t lookup(struct btree *btree, off_t table_offset,
+		    const uint8_t *sha1);
+
+off_t insert_toplevel(struct btree *btree, off_t *table_offset,
+		      uint8_t *sha1, const void *data, size_t len);
+
+static off_t remove_table(struct btree *btree, struct btree_table *table,
+			   size_t i, uint8_t *sha1);
+
+
 /* 15 times faster than gcc's memcmp on x86-64 */
 static int cmp_sha1(const uint8_t *a, const uint8_t *b)
 {
@@ -79,7 +102,7 @@ static int cmp_sha1(const uint8_t *a, const uint8_t *b)
 	return from_be32(*bf) - from_be32(*af);
 }
 
-static struct btree_table *alloc_table(struct btree *btree)
+static struct btree_table *alloc_table()
 {
 	struct btree_table *table = malloc(sizeof *table);
 	memset(table, 0, sizeof *table);
@@ -153,7 +176,7 @@ int btree_open(struct btree *btree, const char *fname)
 	return 0;
 }
 
-static void flush_super(struct btree *btree);
+
 
 int btree_creat(struct btree *btree, const char *fname)
 {
@@ -180,13 +203,7 @@ void btree_close(struct btree *btree)
 	}
 }
 
-static int in_allocator = 0;
-static int delete_larger = 0;
 
-static off_t delete_table(struct btree *btree, off_t table_offset,
-			   uint8_t *sha1);
-
-static off_t collapse(struct btree *btree, off_t table_offset);
 
 /* Return a value that is greater or equal to 'val' and is power-of-two. */
 static size_t round_power2(size_t val)
@@ -197,7 +214,7 @@ static size_t round_power2(size_t val)
 	return i;
 }
 
-static void free_chunk(struct btree *btree, off_t offset, size_t len);
+
 
 /* Allocate a chunk from the database file */
 static off_t alloc_chunk(struct btree *btree, size_t len)
@@ -262,10 +279,7 @@ static off_t alloc_chunk(struct btree *btree, size_t len)
 	return offset;
 }
 
-static off_t lookup(struct btree *btree, off_t table_offset,
-		    const uint8_t *sha1);
-off_t insert_toplevel(struct btree *btree, off_t *table_offset,
-		      uint8_t *sha1, const void *data, size_t len);
+
 
 /* Mark a chunk as unused in the database file */
 static void free_chunk(struct btree *btree, off_t offset, size_t len)
@@ -421,8 +435,6 @@ static off_t collapse(struct btree *btree, off_t table_offset)
 	return ret;
 }
 
-static off_t remove_table(struct btree *btree, struct btree_table *table,
-			   size_t i, uint8_t *sha1);
 
 /* Find and remove the smallest item from the given table. The key of the item
    is stored to 'sha1'. Returns offset to the item */
